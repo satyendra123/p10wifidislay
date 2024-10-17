@@ -1,0 +1,192 @@
+#include <Preferences.h>
+#include <DMD32.h>
+#include "fonts/SystemFont5x7.h"
+#include "fonts/Arial_black_16.h"
+#include <WiFi.h>
+#include <WebServer.h>
+
+#define DISPLAYS_ACROSS 1
+#define DISPLAYS_DOWN 1
+DMD dmd(DISPLAYS_ACROSS, DISPLAYS_DOWN);
+
+const int MY_DMD_nOE_PIN = 22;
+const int PWM_CHANNEL = 0;
+const int PWM_FREQUENCY = 5000;
+const int PWM_RESOLUTION = 8;
+
+const char* ssid = "Airtel_zerotouch";
+const char* password = "Airtel@123";
+
+WebServer server(80);
+Preferences preferences;  // Declare Preferences object
+
+volatile bool displayUpdateRequired = false;
+String dataBuffer = "";
+
+hw_timer_t *timer = NULL;
+
+// Store HTML in program memory
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML>
+<html>
+<head>
+    <title>Message Sender</title>
+</head>
+<body>
+    <h1>Send Message to DMD</h1>
+    <form action="/send" method="POST">
+        <label>Select Action:</label>
+        <input type="radio" id="set_id" name="action" value="set_id" required>
+        <label for="set_id">Set ID</label>
+
+        <input type="radio" id="send_permanent" name="action" value="send_permanent" required>
+        <label for="send_permanent">Send Permanent Message</label>
+
+        <input type="radio" id="send_temporary" name="action" value="send_temporary" required>
+        <label for="send_temporary">Send Temporary Message</label><br><br>
+ 
+        <label>Message</label>
+        <input type="text" name="message" placeholder="Enter message" required>
+        <input type="submit" value="Send">
+    </form>
+</body>
+</html>
+)rawliteral";
+
+void IRAM_ATTR triggerScan() {
+    displayUpdateRequired = true;
+}
+
+void setBrightness(int level) {
+    ledcWrite(PWM_CHANNEL, level); // level should be between 0 and 255
+}
+
+// Function to handle GET requests for the root "/"
+void handleRootGET() {
+    server.send_P(200, "text/html", index_html); // Send HTML from PROGMEM
+}
+
+// Function to handle POST requests for "/send"
+void handleSendPOST() {
+    // Disable the timer before updating the display or preferences
+    timerAlarmDisable(timer);
+
+    String action = server.arg("action");
+    String message = server.arg("message");
+
+    if (action == "set_id") {
+        preferences.begin("storage", false);
+        preferences.putString("device_id", message);
+        preferences.end();
+        Serial.print("Device ID set to: ");
+        Serial.println(message);
+    } else if (action == "send_permanent") {
+        preferences.begin("storage", false);
+        preferences.putString("perm_message", message);
+        preferences.end();
+        Serial.print("Permanent message set to: ");
+        Serial.println(message);
+        displaydata(message);  // Display permanent message
+    } else if (action == "send_temporary") {
+        Serial.print("Temporary message: ");
+        Serial.println(message);
+        displaydata(message);  // Display temporary message
+    }
+
+    // Redirect to the home page ("/") after processing the POST request
+    server.sendHeader("Location", "/", true); // Send a 303 redirect to the home page
+    server.send(303);
+
+    // Re-enable the timer after processing the POST request
+    timerAlarmEnable(timer);
+}
+
+// Setup function
+void setup() {
+    Serial.begin(115200);
+    Serial.println();
+
+    pinMode(MY_DMD_nOE_PIN, OUTPUT);
+    
+    // Set up the LEDC PWM functionality
+    ledcSetup(PWM_CHANNEL, PWM_FREQUENCY, PWM_RESOLUTION);
+    ledcAttachPin(MY_DMD_nOE_PIN, PWM_CHANNEL);
+    
+    // Initialize WiFi
+    Serial.print("Connecting to WiFi");
+    WiFi.begin(ssid, password);
+    int timeoutCounter = 0;
+    
+    while (WiFi.status() != WL_CONNECTED && timeoutCounter < 40) {
+        delay(500);
+        Serial.print(".");
+        timeoutCounter++;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("Connected to WiFi");
+        Serial.println(WiFi.localIP());
+    } else {
+        Serial.println("WiFi connection failed. Restarting...");
+        ESP.restart();
+    }
+    
+    // Initialize server routes
+    server.on("/", HTTP_GET, handleRootGET);
+    server.on("/send", HTTP_POST, handleSendPOST);
+    server.begin(); 
+    Serial.println("HTTP server started");
+
+    // Initialize the timer
+    uint8_t cpuClock = ESP.getCpuFreqMHz();
+    timer = timerBegin(0, cpuClock, true);
+    timerAttachInterrupt(timer, &triggerScan, true);
+    timerAlarmWrite(timer, 300, true);
+    timerAlarmEnable(timer);
+    
+    dmd.selectFont(Arial_Black_16); // Set font for display
+    dmd.clearScreen(true); // Clear display on start
+
+    // Retrieve and display the stored permanent message and ID
+    preferences.begin("storage", true);
+    String permanentMessage = preferences.getString("perm_message", ""); // Default to empty string if not found
+    String storedID = preferences.getString("device_id", "");  // Default to empty string if no ID stored
+    Serial.println("Stored ID: " + storedID);
+    Serial.println("Permanent Message: " + permanentMessage);
+    displaydata(permanentMessage);  
+    preferences.end();
+}
+
+// Function to display data on the DMD
+void displaydata(String message) {
+    dmd.clearScreen(true);  // Clear the screen before displaying a new message
+    delay(500);  // Small delay for better effect
+    dmd.drawString(0, 0, message.c_str(), message.length(), GRAPHICS_NORMAL);  // Display the message on the DMD
+}
+
+void loop() {
+    int level = 10; // Set brightness level (0 to 255)
+    setBrightness(level);
+    
+    server.handleClient(); // Handle incoming client requests
+    
+    if (Serial.available() > 0) {
+        char incomingChar = Serial.read();  // Read each incoming character from serial
+        if (incomingChar == '\n' || incomingChar == '\r') {  // Check for end of line
+            if (dataBuffer.length() > 0) {
+                Serial.print("Received data: ");
+                Serial.println(dataBuffer);  // Print the received data to Serial
+                displaydata(dataBuffer);  // Display the received data on DMD
+                dataBuffer = "";  // Clear the buffer for the next message
+            }
+        } else {
+            dataBuffer += incomingChar;  // Add incoming characters to the buffer
+        }
+    }
+
+    // Check if the display needs updating due to ISR
+    if (displayUpdateRequired) {
+        dmd.scanDisplayBySPI();
+        displayUpdateRequired = false;
+    }
+}
