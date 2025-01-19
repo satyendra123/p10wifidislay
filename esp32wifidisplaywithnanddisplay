@@ -1,0 +1,204 @@
+#Note- actually hum dekhte hai ki ye work kaise karta hai. jab hum wifi change karenge to hume ek ip milega jisse hum hit marenge aur wo hume ip address dega serially. lekin hume kaise pta chalega ki humara ip address kya hai kyuki client to connect krke controller ko serially dekhega nahi
+to iska ek solution hai mdns jisse ki mujhe ab ip address ki jarurat nahi padhegi balki mai esp32.local se ping kara sakta hu. so ye problem to resolve ho gya ab ek aur dusra problem 
+
+/*
+void setup() {
+  Serial2.begin(9600, SERIAL_8N1, 16, 17);
+  Serial.begin(9600);
+  Serial.println("RS485 communication started");
+}
+
+void loop() {
+  // Clear the display
+  String dataToSendClear = "|C|2|6|";
+  Serial2.print(dataToSendClear);
+  Serial.println("Sent: " + dataToSendClear);
+  delay(1000);
+
+  String dataToSend1 = "|C|2|4|1|36-0-#B72|";
+  Serial2.print(dataToSend1);
+  Serial.println("Sent: " + dataToSend1);
+  delay(5000);
+}
+
+*/
+
+#include <WiFi.h>
+#include <WebServer.h>
+#include <EEPROM.h>
+#include <DNSServer.h>
+#include <ESPmDNS.h>
+#include <ArduinoJson.h>
+
+const char* default_ssid = "ESP32_Config";
+const char* default_password = "12345678";
+
+WebServer server(80);
+DNSServer dnsServer;
+
+// Wi-Fi credentials
+String ssid = "";
+String password = "";
+
+// Function to start AP mode
+void startAPMode() {
+  WiFi.softAP(default_ssid, default_password);
+  IPAddress IP = WiFi.softAPIP();
+  Serial.println("AP Mode started");
+  Serial.print("AP IP Address: ");
+  Serial.println(IP);
+
+  dnsServer.start(53, "*", IP);
+
+  // Root page for Wi-Fi configuration
+  server.on("/", []() {
+    String page = "<h1>Wi-Fi Configuration</h1>";
+    page += "<form method='POST' action='/wifi'>";
+    page += "SSID: <input type='text' name='ssid'><br>";
+    page += "Password: <input type='password' name='password'><br>";
+    page += "<button type='submit'>Save</button>";
+    page += "</form>";
+    server.send(200, "text/html", page);
+  });
+
+  // Save Wi-Fi credentials
+  server.on("/wifi", HTTP_POST, handleSaveWiFi);
+
+  // Handle setting Wi-Fi
+  server.on("/setWifi", HTTP_POST, handleSetWiFi);
+
+  server.begin();
+}
+
+// Handle saving Wi-Fi credentials
+void handleSaveWiFi() {
+  if (server.hasArg("plain")) {
+    String jsonData = server.arg("plain");
+
+    DynamicJsonDocument doc(512);
+    DeserializationError error = deserializeJson(doc, jsonData);
+    if (error) {
+      server.send(400, "text/plain", "Invalid JSON format");
+      return;
+    }
+
+    if (doc.containsKey("ssid") && doc.containsKey("password")) {
+      ssid = doc["ssid"].as<String>();
+      password = doc["password"].as<String>();
+
+      EEPROM.writeString(0, ssid);
+      EEPROM.writeString(32, password);
+      EEPROM.commit();
+
+      server.send(200, "application/json", "{\"message\":\"Wi-Fi credentials saved! Rebooting...\"}");
+      delay(2000);
+      ESP.restart();
+    } else {
+      server.send(400, "application/json", "{\"error\":\"Missing 'ssid' or 'password' in JSON\"}");
+    }
+  } else {
+    server.send(400, "application/json", "{\"error\":\"Bad Request - Invalid or missing payload\"}");
+  }
+}
+
+// Handle setting Wi-Fi from another route
+void handleSetWiFi() {
+  if (server.hasArg("plain")) {
+    String jsonData = server.arg("plain");
+
+    DynamicJsonDocument doc(512);
+    DeserializationError error = deserializeJson(doc, jsonData);
+    if (error) {
+      server.send(400, "text/plain", "Invalid JSON format");
+      return;
+    }
+
+    if (doc.containsKey("ssid") && doc.containsKey("password")) {
+      ssid = doc["ssid"].as<String>();
+      password = doc["password"].as<String>();
+
+      EEPROM.writeString(0, ssid);
+      EEPROM.writeString(32, password);
+      EEPROM.commit();
+
+      server.send(200, "application/json", "{\"message\":\"Wi-Fi credentials saved! Rebooting...\"}");
+      delay(2000);
+      ESP.restart();
+    } else {
+      server.send(400, "application/json", "{\"error\":\"Missing 'ssid' or 'password' in JSON\"}");
+    }
+  } else {
+    server.send(400, "application/json", "{\"error\":\"Bad Request - Invalid or missing payload\"}");
+  }
+}
+
+// Send data to display (for future integration)
+void handleSendDataToDisplay() {
+  if (server.hasArg("plain")) {
+    String jsonData = server.arg("plain");
+
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, jsonData);
+    if (error) {
+      server.send(400, "text/plain", "Invalid JSON format");
+      return;
+    }
+
+    if (doc.containsKey("value")) {
+      String data = doc["value"].as<String>();
+      Serial.println("Data to display: " + data);
+      server.send(200, "text/plain", "Data sent to display: " + data);
+    } else {
+      server.send(400, "text/plain", "Bad Request - Missing 'value' field in JSON");
+    }
+  } else {
+    server.send(400, "text/plain", "Bad Request - Missing body or invalid format");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  EEPROM.begin(512);
+
+  String saved_ssid = EEPROM.readString(0);
+  String saved_password = EEPROM.readString(32);
+
+  if (saved_ssid.length() > 0 && saved_password.length() > 0) {
+    WiFi.begin(saved_ssid.c_str(), saved_password.c_str());
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+      delay(1000);
+      Serial.println("Connecting to Wi-Fi...");
+      attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("Connected to Wi-Fi");
+      Serial.print("IP Address: ");
+      Serial.println(WiFi.localIP());
+
+      if (MDNS.begin("esp32")) {
+        Serial.println("MDNS responder started");
+      }
+
+      // Routes in STA mode
+      server.on("/setWifi", HTTP_POST, handleSetWiFi);
+      server.on("/setData", HTTP_POST, handleSendDataToDisplay);
+      server.begin();
+      Serial.println("HTTP server started");
+    } else {
+      Serial.println("Wi-Fi connection failed, starting AP mode...");
+      startAPMode();
+    }
+  } else {
+    Serial.println("No saved Wi-Fi credentials found, starting AP mode...");
+    startAPMode();
+  }
+}
+
+void loop() {
+  server.handleClient();
+  dnsServer.processNextRequest();
+}
+
