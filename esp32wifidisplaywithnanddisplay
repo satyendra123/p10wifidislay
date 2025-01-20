@@ -1,5 +1,11 @@
 #Note- actually hum dekhte hai ki ye work kaise karta hai. jab hum wifi change karenge to hume ek ip milega jisse hum hit marenge aur wo hume ip address dega serially. lekin hume kaise pta chalega ki humara ip address kya hai kyuki client to connect krke controller ko serially dekhega nahi
-to iska ek solution hai mdns jisse ki mujhe ab ip address ki jarurat nahi padhegi balki mai esp32.local se ping kara sakta hu. so ye problem to resolve ho gya ab ek aur dusra problem 
+to iska ek solution hai mdns jisse ki mujhe ab ip address ki jarurat nahi padhegi balki mai esp32.local se ping kara sakta hu. so ye problem to resolve ho gya ab ek aur dusra problem ye hai ki mai different wifi me switch kaise krunga to maine post request banaya hai isme ki http://esp32.local/wifi aur http://esp32.local/setWifi aur http://esp32.local/setData   
+mai simply kya karunga ki wifi ke ssid aur password ko EEPROM memory me save karaunga. ye eeprom se fetch karega aur wifi ko conect karega. aur agar ye kisi bhi karan se us wifi se connect nahi ho payega to ye AP Mode me chala jayega. AP mode means ye mere pass ek hotspot ki tarah open ho jayega aur mai apne aap ko us hotspot se connect karunga.aur connect hone ke bad mai
+apne system me ya apne mobile me 192.168.4.1 ip open karunga to ek webpage open hoga jisme mai ssid aur password enter karunga to mera esp32 ab us wifi network se connect hone lagega. mai same chiz postman se bhi kar sakta hu 
+
+step-1) sending data to display -> http://esp32.local/setData, post method,  { "value": "156" }
+step-2) connecting with different wifi network sta Mode ->  http://esp32.local/setWifi, post method,  { "ssid": "Airtel_moha_9230", "password": "Houston#198" }
+step-3) connecting with different wifi network AP Mode ->  http://192.168.4.1/wifi, post method,  { "ssid": "Airtel_moha_9230", "password": "Houston#198" }
 
 /*
 void setup() {
