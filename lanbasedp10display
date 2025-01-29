@@ -84,5 +84,14 @@ void handleSendDataToDisplay() {
 }
 
 void sendDataToDisplay(String data) {
-  Serial.println("Sending data to display: " + data);
+  void sendDataToDisplay(String data) {
+  String dataToSendClear = "|C|2|6|";
+  Serial2.print(dataToSendClear);
+  Serial.println("Sent to display: " + dataToSendClear);
+  delay(1000);
+
+  String dataToSend = "|C|2|4|1|36-0-#B" + data + "|";
+  Serial2.print(dataToSend);
+  Serial.println("Sent to display: " + dataToSend);
+}
 }
