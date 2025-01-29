@@ -1,0 +1,99 @@
+#include <Ethernet.h>
+#include <WebServer.h>
+#include <EEPROM.h>
+#include <ArduinoJson.h>
+
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; // MAC address for Ethernet shield
+IPAddress ip(192, 168, 1, 177);  // Default static IP
+IPAddress gateway(192, 168, 1, 1);  // Set your gateway IP
+IPAddress subnet(255, 255, 255, 0);  // Set your subnet mask
+
+WebServer server(80);  // Web server on port 80
+
+IPAddress userIp;
+IPAddress userGateway;
+IPAddress userSubnet;
+
+void setup() {
+  Serial.begin(115200);
+
+  Ethernet.begin(mac, ip, gateway, gateway, subnet);
+
+  // Check for Ethernet hardware
+  if (Ethernet.hardwareStatus() == EthernetNoHardware) {
+    Serial.println("Ethernet shield was not found. Sorry, can't run without hardware.");
+    while (true) {
+      delay(1); // Do nothing, no point running without Ethernet hardware
+    }
+  }
+
+  if (Ethernet.linkStatus() == LinkOFF) {
+    Serial.println("Ethernet cable is not connected.");
+  }
+
+  Serial.print("Ethernet IP Address: ");
+  Serial.println(Ethernet.localIP());
+
+  // Start the server
+  server.on("/", handleRoot);
+  server.on("/setIP", HTTP_POST, handleSetIP); // Route for changing IP
+  server.on("/sendData", HTTP_POST, handleSendDataToDisplay); // Route for sending data
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();  // Handle incoming client requests
+}
+
+void handleRoot() {
+  String page = "<h1>Ethernet Configuration</h1>";
+  page += "<h2>Change Static IP Settings</h2>";
+  page += "<form method='POST' action='/setIP'>";
+  page += "IP Address: <input type='text' name='ip' value='" + ip.toString() + "'><br>";
+  page += "<button type='submit'>Save IP Settings</button>";
+  page += "</form>";
+  server.send(200, "text/html", page);
+}
+
+void handleSetIP() {
+  if (server.hasArg("ip") && server.hasArg("gateway") && server.hasArg("subnet")) {
+    String ipStr = server.arg("ip");
+    userIp.fromString(ipStr);
+    EEPROM.put(64, userIp);
+    EEPROM.commit();
+    server.send(200, "application/json", "{\"message\":\"IP settings saved! Rebooting...\"}");
+    delay(2000);
+    asm volatile ("  jmp 0");
+  } 
+  else {
+    server.send(400, "application/json", "{\"error\":\"Missing 'ip', 'gateway', or 'subnet' in the form\"}");
+  }
+}
+
+void handleSendDataToDisplay() {
+  if (server.hasArg("plain")) {
+    String jsonData = server.arg("plain");
+
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, jsonData);
+    if (error) {
+      server.send(400, "text/plain", "Invalid JSON format");
+      return;
+    }
+
+    if (doc.containsKey("value")) {
+      String data = doc["value"].as<String>();
+      Serial.println("Data to display: " + data);
+      sendDataToDisplay(data);
+      server.send(200, "text/plain", "Data sent to display: " + data);
+    } else {
+      server.send(400, "text/plain", "Bad Request - Missing 'value' field in JSON");
+    }
+  } else {
+    server.send(400, "text/plain", "Bad Request - Missing body or invalid format");
+  }
+}
+
+void sendDataToDisplay(String data) {
+  Serial.println("Sending data to display: " + data);
+}
