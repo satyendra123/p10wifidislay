@@ -1,72 +1,121 @@
-#include <Ethernet.h>
-#include <WebServer.h>
-#include <EEPROM.h>
-#include <ArduinoJson.h>
+#include <SPI.h>          // Include SPI for communication with Ethernet Shield
+#include <Ethernet.h>      // Ethernet library to set up the web server
+#include <EEPROM.h>        // EEPROM for storing IP settings
+#include <ArduinoJson.h>   // JSON library to handle JSON data
 
-byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-IPAddress ip(192, 168, 1, 177);
-WebServer server(80);
+// Ethernet MAC and IP address setup
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };  // Unique MAC address
+IPAddress ip(192, 168, 1, 177);  // Static IP address
+IPAddress gateway(192, 168, 1, 1);  // Gateway address
+IPAddress subnet(255, 255, 255, 0);  // Subnet mask
+
+EthernetServer server(80);  // Set up the Ethernet server on port 80
 IPAddress userIp;
 
 void setup() {
-  Serial.begin(115200);
-  Ethernet.begin(mac, ip, gateway, gateway, subnet);
-
+  Serial.begin(115200);  // Start serial communication
+  Ethernet.begin(mac, ip, gateway, gateway, subnet);  // Initialize Ethernet
+  
+  // Check if Ethernet shield is present
   if (Ethernet.hardwareStatus() == EthernetNoHardware) {
     Serial.println("Ethernet shield was not found. Sorry, can't run without hardware.");
     while (true) {
-      delay(1);
+      delay(1);  // Halt the program if no Ethernet shield is detected
     }
   }
 
+  // Check if Ethernet cable is connected
   if (Ethernet.linkStatus() == LinkOFF) {
     Serial.println("Ethernet cable is not connected.");
   }
+
+  // Print the assigned IP address to the Serial Monitor
   Serial.print("Ethernet IP Address: ");
   Serial.println(Ethernet.localIP());
-  server.on("/", handleRoot);
-  server.on("/setIP", HTTP_POST, handleSetIP);
-  server.on("/sendData", HTTP_POST, handleSendDataToDisplay);
-  server.begin();
+
+  server.begin();  // Start the server
 }
 
 void loop() {
-  server.handleClient();
+  EthernetClient client = server.available();  // Check if a client is connected
+
+  if (client) {
+    String request = "";
+    while (client.connected()) {
+      if (client.available()) {
+        char c = client.read();  // Read incoming character
+        request += c;  // Append the character to the request string
+        if (c == '\n') {  // If a newline is encountered, end of HTTP request
+          break;
+        }
+      }
+    }
+
+    // Check for specific routes in the HTTP request
+    if (request.indexOf("GET / ") != -1) {
+      handleRoot(client);
+    }
+    else if (request.indexOf("POST /setIP") != -1) {
+      handleSetIP(client);
+    }
+    else if (request.indexOf("POST /sendData") != -1) {
+      handleSendDataToDisplay(client);
+    }
+
+    client.stop();  // Stop the client connection
+  }
 }
 
-void handleRoot() {
+void handleRoot(EthernetClient &client) {
   String page = "<h1>Ethernet Configuration</h1>";
   page += "<h2>Change Static IP Settings</h2>";
   page += "<form method='POST' action='/setIP'>";
   page += "IP Address: <input type='text' name='ip' value='" + ip.toString() + "'><br>";
+  page += "Gateway: <input type='text' name='gateway' value='" + gateway.toString() + "'><br>";
+  page += "Subnet: <input type='text' name='subnet' value='" + subnet.toString() + "'><br>";
   page += "<button type='submit'>Save IP Settings</button>";
   page += "</form>";
-  server.send(200, "text/html", page);
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: text/html");
+  client.println("Connection: close");
+  client.println();
+  client.println(page);  // Send HTML page to client
 }
 
-void handleSetIP() {
-  if (server.hasArg("ip") && server.hasArg("gateway") && server.hasArg("subnet")) {
-    String ipStr = server.arg("ip");
+void handleSetIP(EthernetClient &client) {
+  if (client.available()) {
+    String ipStr = client.readStringUntil('\n');
     userIp.fromString(ipStr);
-    EEPROM.put(64, userIp);
-    EEPROM.commit();
-    server.send(200, "application/json", "{\"message\":\"IP settings saved! Rebooting...\"}");
+    EEPROM.put(64, userIp);  // Store the IP in EEPROM
+    EEPROM.commit();  // Commit the changes to EEPROM
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: application/json");
+    client.println("Connection: close");
+    client.println();
+    client.println("{\"message\":\"IP settings saved! Rebooting...\"}");
     delay(2000);
-    asm volatile ("  jmp 0");
-  } 
-  else {
-    server.send(400, "application/json", "{\"error\":\"Missing 'ip', 'gateway', or 'subnet' in the form\"}");
+    asm volatile ("  jmp 0");  // Reboot the device
+  } else {
+    client.println("HTTP/1.1 400 Bad Request");
+    client.println("Content-Type: application/json");
+    client.println("Connection: close");
+    client.println();
+    client.println("{\"error\":\"Missing 'ip', 'gateway', or 'subnet' in the form\"}");
   }
 }
 
-void handleSendDataToDisplay() {
-  if (server.hasArg("plain")) {
-    String jsonData = server.arg("plain");
-
+void handleSendDataToDisplay(EthernetClient &client) {
+  if (client.available()) {
+    String jsonData = client.readStringUntil('\n');
     DynamicJsonDocument doc(1024);
-    DeserializationError error = deserializeJson(doc, jsonData);
+    DeserializationError error = deserializeJson(doc, jsonData);  // Parse JSON data
+
     if (error) {
-      server.send(400, "text/plain", "Invalid JSON format");
+      client.println("HTTP/1.1 400 Bad Request");
+      client.println("Content-Type: text/plain");
+      client.println("Connection: close");
+      client.println();
+      client.println("Invalid JSON format");
       return;
     }
 
@@ -74,24 +123,34 @@ void handleSendDataToDisplay() {
       String data = doc["value"].as<String>();
       Serial.println("Data to display: " + data);
       sendDataToDisplay(data);
-      server.send(200, "text/plain", "Data sent to display: " + data);
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/plain");
+      client.println("Connection: close");
+      client.println();
+      client.println("Data sent to display: " + data);
     } else {
-      server.send(400, "text/plain", "Bad Request - Missing 'value' field in JSON");
+      client.println("HTTP/1.1 400 Bad Request");
+      client.println("Content-Type: text/plain");
+      client.println("Connection: close");
+      client.println();
+      client.println("Bad Request - Missing 'value' field in JSON");
     }
   } else {
-    server.send(400, "text/plain", "Bad Request - Missing body or invalid format");
+    client.println("HTTP/1.1 400 Bad Request");
+    client.println("Content-Type: text/plain");
+    client.println("Connection: close");
+    client.println();
+    client.println("Bad Request - Missing body or invalid format");
   }
 }
 
 void sendDataToDisplay(String data) {
-  void sendDataToDisplay(String data) {
   String dataToSendClear = "|C|2|6|";
-  Serial2.print(dataToSendClear);
+  Serial2.print(dataToSendClear);  // Send command to clear the display
   Serial.println("Sent to display: " + dataToSendClear);
   delay(1000);
 
   String dataToSend = "|C|2|4|1|36-0-#B" + data + "|";
-  Serial2.print(dataToSend);
+  Serial2.print(dataToSend);  // Send the actual data to display
   Serial.println("Sent to display: " + dataToSend);
-}
 }
